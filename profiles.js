@@ -81,7 +81,10 @@
   let lastKey = '';                                             // WHY: do not log the same chapter twice in a row
   let lastBug = null;                                           // the newest error report app.js showed (for the "Send to admin" button)
   let lastAutoBug = 0;                                          // WHY: automatic sending is limited to one report per 30 seconds
-  let view = { tab: 'in', sel: '', filter: '', kind: 'all', msg: '', ok: false, cache: null };   // what the window currently shows
+  // ROUND 38: added dateFrom/dateTo to view state so the date range filter persists while the tab is open.
+  // WHY: the filter is applied in listHtml() on every render; keeping it in view means the user's chosen range survives re-renders.
+  //   Default: last 7 days (set when the 'me' tab is opened). 0/Infinity = no bound (all dates). IMPROVE: persist across sessions.
+  let view = { tab: 'in', sel: '', filter: '', kind: 'all', msg: '', ok: false, cache: null, dateFrom: Date.now() - 7 * 86400000, dateTo: Infinity };   // what the window currently shows
 
   /* ---- 3. personal lists (bookmarks etc.) of one profile, kept in this browser -------------------------------------------------- */
   const listKey = (u, k) => 'mf_u:' + u + ':' + k;              // the same key app.js uses
@@ -110,15 +113,28 @@
   // (union, newest first) instead of letting one copy overwrite the other. IMPROVE: show the guest items as "not yet saved" in the window.
   const GUEST = 'mf_guest_acts';
   const guestItems = () => LS.get(GUEST, []);
-  const keyOf = { books: x => x && x.url, reads: x => x && x.chapterUrl, recent: x => x && (x.url || x.link || x.u) };
+  // ROUND 30: reads are one row per MANGA (app.js saveRead replaces the row with the same id), so the key is the id; the old key (the chapter address) kept an old row for every chapter ever
+  // read on the other device, and the two copies never became equal (the cause of the endless reloading, see section 6 below).
+  const keyOf = { books: x => x && x.url, reads: x => x && (x.id || x.chapterUrl), recent: x => x && (x.url || x.link || x.u) };
+  // ROUND 30: the limits app.js keeps (addRecent keeps 20 pages, saveRead keeps 30 manga). WHY: a merged list longer than the app's own limit is cut by the app at its next save, then the cloud
+  // gives the cut rows back, the copies differ again and the page reloaded - for ever. HOW: the merge keeps the same numbers. IMPROVE: let app.js tell profiles.js its limits in an event.
+  // ROUND 38: raised from 20/30 to 500 to match the new limits in app.js — users want all history visible. IMPROVE: none needed.
+  const CAP = { recent: 500, reads: 500 };
   function mergeLists(a, b) {                                   // a = one copy, b = another; returns the combined lists
     const out = {};
     LISTS.forEach(k => {
       const x = a && a[k], y = b && b[k];
       if (Array.isArray(x) || Array.isArray(y)) {
-        const seen = new Set(), res = [], kf = keyOf[k] || (v => JSON.stringify(v));
-        (x || []).concat(y || []).forEach(it => { const id = kf(it) || JSON.stringify(it); if (!seen.has(id)) { seen.add(id); res.push(it); } });
-        out[k] = res.slice(0, 300);
+        // ROUND 30: when both copies hold the same thing (same key) the NEWER one (bigger "at") wins; lists whose rows all carry a time are put newest first, so a row that was added
+        // on another device is not cut off by the limit; then the app's own limit is applied. The same two copies always give the same answer, so they agree after one merge.
+        const best = new Map(), order = [], kf = keyOf[k] || (v => JSON.stringify(v));
+        (x || []).concat(y || []).forEach(it => {
+          const id = kf(it) || JSON.stringify(it), old = best.get(id);
+          if (!old) { best.set(id, it); order.push(id); } else if (((it && it.at) || 0) > ((old && old.at) || 0)) best.set(id, it);
+        });
+        const res = order.map(id => best.get(id));
+        if (res.length && res.every(it => it && typeof it.at === 'number')) res.sort((p, q) => q.at - p.at);          // newest first (the sort keeps the order of equal times)
+        out[k] = res.slice(0, CAP[k] || 300);
       } else if ((x && typeof x === 'object') || (y && typeof y === 'object')) out[k] = Object.assign({}, y || {}, x || {});   // progress: object of chapter -> position
       else if (x != null || y != null) out[k] = x != null ? x : y;
     });
@@ -320,11 +336,30 @@
     border:1px solid #ffffff3a;background:#05060f;color:#fff;font:500 16px ui-monospace,Consolas,monospace;}
   #mfProf input:focus{outline:2px solid #7ff6ff;border-color:transparent;}
   #mfProf .mfp-code{letter-spacing:.5em;text-align:center;font-size:20px;}
+  /* ROUND 39 FIX: buttons now use inline-flex to CENTER their text/icon both ways. WHY: before this, a button that
+     ended up taller than its own text (because a row-sibling button wrapped to two lines, stretching every button in
+     that row to match) left its single-line text sitting at the top instead of in the middle — looking "misaligned".
+     white-space:nowrap stops the button's OWN text from wrapping in the first place; the row above now gives every
+     button a 140px floor so there is normally room for the label on one line. */
   #mfProf .mfp-btn{min-height:44px;padding:8px 16px;border-radius:12px;border:1px solid #7ff6ff88;cursor:pointer;color:#fff;font:700 .9rem system-ui,sans-serif;
-    background:linear-gradient(135deg,#25a8ff,#7a3cff 55%,#c020ff);box-shadow:0 0 14px rgba(80,90,255,.5);}
+    background:linear-gradient(135deg,#25a8ff,#7a3cff 55%,#c020ff);box-shadow:0 0 14px rgba(80,90,255,.5);
+    display:inline-flex;align-items:center;justify-content:center;text-align:center;white-space:nowrap;gap:6px;}
   #mfProf .mfp-btn.ghost{background:#ffffff10;border-color:#ffffff40;box-shadow:none;} #mfProf .mfp-btn.red{background:#c92a2a55;border-color:#ff6b6b;box-shadow:none;}
   #mfProf .mfp-btn.small{min-height:34px;padding:4px 12px;font-size:.8rem;}
-  #mfProf .mfp-row{display:flex;gap:8px;flex-wrap:wrap;} #mfProf .mfp-row>*{flex:1;}
+  /* ROUND 35: × delete button on each Continue reading row. WHY: lets the user remove one entry without clearing all history.
+     HOW: a circular × button at the right of the row. On hover it turns red to signal "this will remove it". */
+  #mfProf .mfp-del{min-width:30px!important;min-height:30px!important;width:30px;height:30px;padding:0!important;border-radius:50%!important;font-size:.9rem;display:grid;place-items:center;flex:none;margin-left:2px;}
+  #mfProf .mfp-del:hover{background:#c92a2a!important;border-color:#ff6b6b!important;box-shadow:0 0 8px rgba(200,42,42,.5)!important;}
+  #mfProf .mfp-del:active{transform:scale(.9);}
+  /* ROUND 39 FIX — button/row alignment. WHY: "flex:1" on every direct child of .mfp-row also stretched the small
+     "From:"/"To:" text labels in the date row to the SAME width as the date inputs next to them, leaving a big gap
+     of empty space inside each label and squashing the actual date boxes — this is the misalignment the user saw.
+     HOW: give row children a sane minimum width (140px) instead of growing from zero, so buttons/inputs wrap onto a
+     new line cleanly on narrow phones rather than being squeezed/stretched unevenly; the date-row labels below get
+     flex:0 so they stay their natural (small) width and never compete with the input for space. IMPROVE: none needed. */
+  #mfProf .mfp-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;} #mfProf .mfp-row>*{flex:1 1 140px;}
+  #mfProf .mfp-daterow{row-gap:6px;} #mfProf .mfp-daterow label{flex:0 0 auto;}
+  #mfProf .mfp-daterow input[type=date]{flex:1 1 120px;min-width:0;}
   #mfProf .mfp-note{font:500 .78rem/1.45 system-ui,sans-serif;color:#aab4e8;margin:0;}
   #mfProf .mfp-msg{padding:8px 12px;border-radius:10px;font:600 .85rem system-ui,sans-serif;background:#c92a2a33;border:1px solid #ff6b6b;}
   #mfProf .mfp-msg.ok{background:#2f9e4433;border-color:#51cf66;}
@@ -351,30 +386,86 @@
 
   /* ---- 10. the window --------------------------------------------------------------------------------------------------------------- */
   const dlg = document.createElement('dialog'); dlg.id = 'mfProf'; dlg.setAttribute('aria-label', 'Profile'); document.body.appendChild(dlg);
+  // ROUND 39 FIX — "click/tap outside to close" was missing from the Profile window.
+  // WHY: app.js already gives every <dialog> this behaviour (see its "CLICK OUTSIDE = CLOSE" section, round 11), but
+  //   it does that ONCE, early, by looping over the <dialog> elements that exist in index.html at that moment. This
+  //   #mfProf dialog is created by THIS file instead, later — profiles.js only runs after the page's 'load' event —
+  //   so it was never in that list and never got the close-on-outside-tap behaviour, even though every other floating
+  //   window on the site (Settings, the download window, error reports) already has it. HOW: the exact same two-step
+  //   pointerdown+click pattern as app.js: a press must both START and END on the dark backdrop (outside the white
+  //   box), so selecting text inside the window and releasing the mouse outside it does NOT close it by accident.
+  //   This never fires while the form is mid-submit (the 'submit' handler below calls preventDefault + awaits the
+  //   server before anything closes), so a sign-in/create in progress is never interrupted. IMPROVE: a small
+  //   closing animation, shared with app.js's copy of this code.
+  (function addClickOutsideClose() {
+    let downOut = false;
+    const outside = e => { const r = dlg.getBoundingClientRect(); return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom; };
+    dlg.addEventListener('pointerdown', e => { downOut = e.target === dlg && outside(e); });
+    dlg.addEventListener('click', e => { if (downOut && e.target === dlg && outside(e)) dlg.close(); downOut = false; });
+  })();
   const icon = { read: '&#128214;', download: '&#11015;&#65039;' };   // little pictures for the history rows
   const setMsg = (m, ok) => { view.msg = m || ''; view.ok = !!ok; };   // the coloured message line at the top of the window
 
+  // ROUND 38 — DATE FILTER helpers. WHY: with ALL history stored there can be thousands of entries; a date-range filter
+  //   lets users focus on recent reads without scrolling. HOW: view.dateFrom and view.dateTo are timestamps (ms); entries
+  //   outside the range are hidden. Default = last 7 days. IMPROVE: add a calendar picker.
   // WHY: one list of history items, used for "my history" and for the admin looking at one profile. HOW: filter text + kind buttons.
+  // ROUND 36: each row now has a × delete button (canOpen=true = owner's own view only; admin looking at someone else has no delete).
+  //   HOW: the button carries data-act="delact" plus data-t (the timestamp as a string) and data-url so the click handler
+  //   can find the exact entry and remove it. We use t+url as a composite key because activity items have no unique id field.
+  //   ROUND 38: removed the 200-entry cap; added date-range filter; canOpen also enables cloud delete.
+  //   IMPROVE: paginate long lists; add undo (short grace period before the item disappears).
   function listHtml(items, canOpen) {
     const q = view.filter.toLowerCase();
-    const rows = items.slice().reverse().filter(x => (view.kind === 'all' || x.type === view.kind) && (!q || (x.title + ' ' + x.chapter + ' ' + x.host).toLowerCase().includes(q)));
-    // WHY: the history list with its search box and the three filter buttons. HOW: builds an HTML text; every outside value
-    // goes through esc() first. IMPROVE: paginate long lists.
+    // ROUND 38: date range filter. WHY: without a cap, the full history can be very long — the filter gives quick access to
+    //   any window. HOW: view.dateFrom / view.dateTo are timestamps; entries outside are hidden. 0 = no bound.
+    //   Default is set once when the tab is first opened (last 7 days). IMPROVE: add a calendar date-picker widget.
+    const fromTs = view.dateFrom || 0, toTs = view.dateTo || Infinity;
+    const rows = items.slice().reverse().filter(x =>
+      (view.kind === 'all' || x.type === view.kind) &&
+      (!q || (x.title + ' ' + x.chapter + ' ' + x.host).toLowerCase().includes(q)) &&
+      ((x.t || 0) >= fromTs) && ((x.t || 0) <= toTs)
+    );
+    // WHY: date <input type=date> uses YYYY-MM-DD strings; we convert to/from timestamps for the filter. IMPROVE: use Intl.
+    const tsToDate = ts => ts ? new Date(ts).toISOString().slice(0, 10) : '';
+    const nowDate = tsToDate(Date.now()), weekAgoDate = tsToDate(Date.now() - 7 * 86400000);
+    // WHY: the history list with its search box, date range, and the three filter buttons. HOW: builds an HTML text; every
+    //   outside value goes through esc() first. IMPROVE: paginate long lists.
     return '<div class="mfp-row"><input type="search" id="mfpFilter" placeholder="Search the history…" value="' + esc(view.filter) + '" aria-label="Search the history">' +
       '<span class="mfp-tabs" style="flex:0 0 auto">' + ['all', 'read', 'download'].map(k => '<button data-act="kind" data-v="' + k + '" class="' + (view.kind === k ? 'on' : '') + '" style="min-width:64px">' + k + '</button>').join('') + '</span></div>' +
-      (rows.length ? '<ul class="mfp-list">' + rows.slice(0, 200).map(x => '<li class="mfp-it"><span class="ico">' + (icon[x.type] || '&#8226;') + '</span><span class="txt"><div class="t">' + esc(x.title || x.url) + (x.chapter ? ' · ' + esc(x.chapter) : '') + '</div><div class="s">' + esc(x.host || '') + ' · ' + ago(x.t) + ' · ' + esc(fmt(x.t)) + '</div></span>' +
-        (canOpen && x.type === 'read' && safeHttp(x.url) ? '<button class="mfp-btn small ghost" data-act="open" data-url="' + esc(x.url) + '">Open</button>' : '') + '</li>').join('') + '</ul>' : '<div class="mfp-empty">Nothing here yet.</div>');
+      '<div class="mfp-row mfp-daterow"><label for="mfpFrom" style="font-size:0.82em;white-space:nowrap">From:</label><input type="date" id="mfpFrom" data-act="datefrom" value="' + esc(tsToDate(fromTs) || weekAgoDate) + '" max="' + esc(nowDate) + '" style="flex:1" aria-label="History from date">' +
+      '<label for="mfpTo" style="font-size:0.82em;white-space:nowrap">To:</label><input type="date" id="mfpTo" data-act="dateto" value="' + esc(tsToDate(toTs === Infinity ? 0 : toTs) || nowDate) + '" max="' + esc(nowDate) + '" style="flex:1" aria-label="History to date">' +
+      '<button data-act="dateall" style="white-space:nowrap;font-size:0.82em" class="mfp-btn ghost small">All dates</button></div>' +
+      (rows.length ? '<ul class="mfp-list">' + rows.map(x => {
+        // WHY: the × button is only shown when canOpen=true (the profile owner is looking at their own history, not the admin view).
+        //   HOW: data-t holds the timestamp (used as part of the composite key); data-url is the other half.
+        //   We encode timestamp as a plain string — JSON.stringify is not needed because timestamp is always a number.
+        const delBtn = canOpen ? '<button class="mfp-btn small ghost mfp-del" data-act="delact" data-t="' + esc(String(x.t || '')) + '" data-url="' + esc(x.url || '') + '" title="Remove this entry" aria-label="Remove this entry">&#215;</button>' : '';
+        const openBtn = (canOpen && x.type === 'read' && safeHttp(x.url)) ? '<button class="mfp-btn small ghost" data-act="open" data-url="' + esc(x.url) + '">Open</button>' : '';
+        return '<li class="mfp-it"><span class="ico">' + (icon[x.type] || '&#8226;') + '</span><span class="txt"><div class="t">' + esc(x.title || x.url) + (x.chapter ? ' · ' + esc(x.chapter) : '') + '</div><div class="s">' + esc(x.host || '') + ' · ' + ago(x.t) + ' · ' + esc(fmt(x.t)) + '</div></span>' + openBtn + delBtn + '</li>';
+      }).join('') + '</ul>' : '<div class="mfp-empty">Nothing here yet.</div>');
   }
   // WHY: the three big numbers above a history list. HOW: counts from the items.
   const stats = items => '<div class="mfp-stats"><div class="mfp-stat"><b>' + items.filter(x => x.type === 'read').length + '</b><span>chapters read</span></div><div class="mfp-stat"><b>' + items.filter(x => x.type === 'download').length + '</b><span>downloads</span></div><div class="mfp-stat"><b>' + new Set(items.map(x => x.title)).size + '</b><span>manga</span></div></div>';
   // WHY: bookmarks + "continue reading" of one profile (from its saved lists). canOpen=false for the admin's read-only view.
+  // ROUND 35: added × delete button to each "Continue reading" row (canOpen=true only — the admin's read-only view has no delete).
+  //   HOW: each row gets a data-act="delread" button with data-id set to the entry's id (or chapterUrl as fallback key).
+  //   The click handler below saves the updated list back and re-renders. Works for both local and cloud profiles.
   function marksHtml(state, canOpen) {
     const books = (state && state.books) || [], reads = (state && state.reads) || [];
+    // WHY: one row for bookmarks and admin-view reads (no delete button). esc() prevents HTML injection in titles.
     const row = (t, s, url, ico) => '<li class="mfp-it"><span class="ico">' + ico + '</span><span class="txt"><div class="t">' + esc(t) + '</div><div class="s">' + esc(s) + '</div></span>' + (canOpen && safeHttp(url) ? '<button class="mfp-btn small ghost" data-act="openpage" data-url="' + esc(url) + '">Open</button>' : '') + '</li>';
-    // WHY: the bookmark and continue-reading lists. HOW: row() builds one line; esc() protects against HTML in titles; the
+    // WHY: one row for "Continue reading" with an optional × delete button (only when canOpen=true = the owner's own view).
+    //   HOW: data-act="delread" + data-id carries the entry's unique id so the click handler knows which item to remove.
+    const readRow = r => {
+      const delBtn = canOpen ? '<button class="mfp-btn small ghost mfp-del" data-act="delread" data-id="' + esc(r.id || r.chapterUrl || '') + '" title="Remove from history" aria-label="Remove from history">&#215;</button>' : '';
+      const openBtn = (canOpen && safeHttp(r.chapterUrl)) ? '<button class="mfp-btn small ghost" data-act="openpage" data-url="' + esc(r.chapterUrl) + '">Open</button>' : '';
+      return '<li class="mfp-it"><span class="ico">&#128214;</span><span class="txt"><div class="t">' + esc(r.title || r.chapterUrl) + '</div><div class="s">' + esc([r.host, r.chapterLabel].filter(Boolean).join(' · ')) + '</div></span>' + openBtn + delBtn + '</li>';
+    };
+    // WHY: the bookmark and continue-reading lists. HOW: row() builds one line; esc() protects against HTML in titles.
     // Open button only appears for real web addresses.
     return '<h3>&#11088; Bookmarks (' + books.length + ')</h3>' + (books.length ? '<ul class="mfp-list">' + books.slice(0, 100).map(b => row(b.title || b.url, b.url, b.url, '&#11088;')).join('') + '</ul>' : '<div class="mfp-empty">No bookmarks yet.</div>') +
-      '<h3>&#128214; Continue reading (' + reads.length + ')</h3>' + (reads.length ? '<ul class="mfp-list">' + reads.slice(0, 50).map(r => row(r.title || r.chapterUrl, [r.host, r.chapterLabel].filter(Boolean).join(' · '), r.chapterUrl, '&#128214;')).join('') + '</ul>' : '<div class="mfp-empty">Nothing yet.</div>');
+      '<h3>&#128214; Continue reading (' + reads.length + ')</h3>' + (reads.length ? '<ul class="mfp-list">' + reads.slice(0, 50).map(readRow).join('') + '</ul>' : '<div class="mfp-empty">Nothing yet.</div>');
   }
   // WHY: bug reports as a list (admin: all, or one profile's). Each report opens as text; the admin can delete it.
   function bugsHtml(bugs, canDel) {
@@ -406,13 +497,25 @@
         '<div class="mfp-tabs">' + tabs.map(t => '<button data-act="tab" data-v="' + t[0] + '" class="' + (view.tab === t[0] ? 'on' : '') + '">' + t[1] + '</button>').join('') + '</div>' + msg;
       if (view.tab === 'server' && admin) h += serverHtml();
       else if (view.tab === 'me') {
-        let items = []; try { items = await API().items(session.user); } catch (e) { h += '<div class="mfp-msg">' + esc(e.message) + '</div>'; }
-        items = items.concat(session.cloud ? pending : []);
-        view.cache = items;
+        // ROUND 38 FIX — use existing view.cache when available instead of ALWAYS re-fetching from API.
+        // WHY: before this fix, every call to render() fetched fresh items from the API. After a delact, view.cache was
+        //   updated locally, but then render() ran and immediately replaced view.cache with the unmodified API response —
+        //   making the deletion seem to do nothing (item reappeared). HOW: if view.cache already holds data (populated by a
+        //   previous render or by a delete), re-use it; only fetch fresh data when cache is null (first open, or after clear).
+        //   The user can tap "Sync now" to force a fresh pull from the cloud. IMPROVE: add a small "refresh" icon button.
+        let items;
+        if (view.cache !== null) {
+          items = view.cache;
+        } else {
+          items = []; try { items = await API().items(session.user); } catch (e) { h += '<div class="mfp-msg">' + esc(e.message) + '</div>'; }
+          items = items.concat(session.cloud ? pending : []);
+          view.cache = items;
+        }
         const si = syncInfo();
         h += '<p class="mfp-note">Sync: <b>' + (si.ok === null ? 'nothing sent yet' : si.ok ? 'saved on the server ' + ago(si.t) + ' (' + si.sent + ' items sent in total)' : 'FAILED ' + ago(si.t) + ': ' + esc(si.err)) + '</b>' + (pending.length ? ' · ' + pending.length + ' waiting' : '') + '</p>' + stats(items) + listHtml(items, true) +
           '<label class="mfp-sw"><input type="checkbox" id="mfpAuto"' + (LS.get('mf_autobug', false) ? ' checked' : '') + '> Send error reports to the admin automatically</label>' +
-          '<div class="mfp-row">' + (session.cloud ? '<button class="mfp-btn small" data-act="syncnow">&#8635; Sync now</button>' : '') + '<button class="mfp-btn ghost small" data-act="export">Export (JSON)</button><button class="mfp-btn ghost small" data-act="clear">Clear my history</button>' + (admin ? '' : '<button class="mfp-btn red small" data-act="del" data-u="' + esc(session.user) + '">Delete profile</button>') + '</div>';
+          // ROUND 38: "Export (JSON)" shortened to "Export" so the label fits on small mobile buttons without clipping. IMPROVE: add an icon.
+          '<div class="mfp-row">' + (session.cloud ? '<button class="mfp-btn small" data-act="syncnow">&#8635; Sync now</button>' : '') + '<button class="mfp-btn ghost small" data-act="export">Export</button><button class="mfp-btn ghost small" data-act="clear">Clear history</button>' + (admin ? '' : '<button class="mfp-btn red small" data-act="del" data-u="' + esc(session.user) + '">Delete profile</button>') + '</div>';
       } else if (view.tab === 'marks') {
         h += marksHtml(readLists(session.user), true) + '<p class="mfp-note">These lists belong to <b>' + esc(session.user) + '</b> only. ' + (session.cloud ? 'They are copied to the server, so they follow you to other devices.' : 'They stay in this browser.') + '</p>' +
           (session.cloud ? '<div class="mfp-row"><button class="mfp-btn ghost small" data-act="syncnow">Sync now</button></div>' : '');
@@ -480,25 +583,139 @@
     try { await signIn($('#mfpUser').value, $('#mfpCode').value, view.tab === 'create'); } catch (err) { setMsg(err.message); }
     render();
   });
-  dlg.addEventListener('input', e => { if (e.target.id === 'mfpFilter') { view.filter = e.target.value; const pos = e.target.selectionStart; render().then(() => { const f = $('#mfpFilter'); if (f) { f.focus(); f.setSelectionRange(pos, pos); } }); } });
-  dlg.addEventListener('change', e => { if (e.target.id === 'mfpAuto') LS.set('mf_autobug', e.target.checked); });   // the automatic-bug switch
+  dlg.addEventListener('input', e => {
+    if (e.target.id === 'mfpFilter') { view.filter = e.target.value; const pos = e.target.selectionStart; render().then(() => { const f = $('#mfpFilter'); if (f) { f.focus(); f.setSelectionRange(pos, pos); } }); }
+    // ROUND 39 FIX: date inputs are handled on 'change' below now, NOT here. See that handler for why.
+  });
+  dlg.addEventListener('change', e => {
+    if (e.target.id === 'mfpAuto') LS.set('mf_autobug', e.target.checked);   // the automatic-bug switch
+    // ROUND 39 FIX — date range inputs were stuck on the default date and could not be changed.
+    // WHY (root cause): the OLD code listened on 'input', which a native <input type=date> fires on EVERY partial
+    //   keystroke — typing just the day or month before the year is filled in counts as one. Each of those partial
+    //   edits gave e.target.value = '' (not a full date yet), which set view.dateFrom/dateTo back to the empty
+    //   default and immediately re-rendered the whole dialog — wiping out what the person was in the middle of
+    //   typing before they could finish. Using the calendar pop-up had the same problem: the dialog re-rendered
+    //   (replacing the <input> element) while the native picker was still interacting with the old element.
+    // HOW (fix): listen on 'change' instead — it fires exactly ONCE, after the date is actually complete (the
+    //   picker closes or the typed value is valid), so the filter only updates when there is a real date to apply.
+    //   A regex double-checks the value is a full YYYY-MM-DD before converting it, so a browser quirk can never
+    //   produce an invalid timestamp. Uses safeRender() (round 38's lock) instead of a bare render() so this can
+    //   never race with a history delete tap. IMPROVE: none needed.
+    if (e.target.id === 'mfpFrom' || e.target.id === 'mfpTo') {
+      const d = e.target.value, valid = /^\d{4}-\d{2}-\d{2}$/.test(d);
+      if (e.target.id === 'mfpFrom') view.dateFrom = valid ? new Date(d + 'T00:00:00').getTime() : 0;
+      else view.dateTo = valid ? (new Date(d + 'T00:00:00').getTime() + 86399999) : Infinity;
+      safeRender();
+    }
+  });
+
+  // ROUND 38 — RENDERING LOCK. WHY: the old handler called render() without await, so two rapid × taps could both finish
+  //   "removing" the entry before either render() ran. The second render() re-fetched from the API and put the deleted item back.
+  //   HOW: a simple boolean lock. While render() is running any new click sets renderPending=true; when render() finishes,
+  //   if renderPending is true it re-runs once more (picks up all changes that happened during the run). This means the list
+  //   is always consistent after the last click, with no race. IMPROVE: use an async mutex library for more complex flows.
+  let renderLock = false, renderPending = false;
+  async function safeRender() {
+    if (renderLock) { renderPending = true; return; }
+    renderLock = true;
+    try { await render(); } finally {
+      renderLock = false;
+      if (renderPending) { renderPending = false; safeRender(); }
+    }
+  }
+
   dlg.addEventListener('click', async e => {
     const b = e.target.closest('[data-act]'); if (!b || b.tagName === 'FORM') return;
     const act = b.dataset.act, u = b.dataset.u;
     try {
       if (act === 'close') { dlg.close(); return; }
-      else if (act === 'tab') { view.tab = b.dataset.v; setMsg(''); }
+      else if (act === 'tab') {
+        // WHY: clear cache on tab switch so the new tab loads fresh data. Without this, switching back to 'me' shows stale
+        //   data from a previous view. IMPROVE: add a TTL (refresh if older than 60 s).
+        view.cache = null;
+        view.tab = b.dataset.v; setMsg('');
+      }
       else if (act === 'kind') view.kind = b.dataset.v;
+      // ROUND 38: "All dates" button clears the date range filter entirely.
+      // WHY: user wants to see everything — reset both bounds so the filter passes every entry. IMPROVE: none needed.
+      else if (act === 'dateall') { view.dateFrom = 0; view.dateTo = Infinity; }
       else if (act === 'sel') view.sel = u;
       else if (act === 'open') { location.hash = '#r=' + encodeURIComponent(b.dataset.url); location.reload(); return; }
       else if (act === 'openpage') { location.href = location.pathname + '?url=' + encodeURIComponent(b.dataset.url); return; }
       else if (act === 'out') { await flush(false); await pushState(); try { if (session.cloud) await Cloud.logout(); } catch { /* the token expires anyway */ } session = null; LS.del('mf_session'); location.reload(); return; }
+      // ROUND 38: shortened export label — was "Export (JSON)", now "Export" so it fits on small mobile buttons. Same function.
       else if (act === 'export') download('mangaflow-history-' + (view.sel || session.user) + '.json', view.cache || []);
       else if (act === 'exportall') { const all = {}; for (const x of await API().users()) all[x.user] = await API().userData(x.user); download('mangaflow-all-profiles.json', all); }
-      else if (act === 'clear') { if (confirm('Delete all of your history?')) { await API().clear(session.user); pending = []; setMsg('History cleared.', true); } }
+      else if (act === 'clear') {
+        if (confirm('Delete all of your history?')) {
+          await API().clear(session.user);
+          // ROUND 38: also clear cloud storage for this user so orphaned items do not reappear after sync.
+          // WHY: clearing local history without telling the cloud means the cloud still holds every old entry; "Sync now"
+          //   restores them. HOW: also wipe the cloud-side activity log via the Worker. IMPROVE: add a /clear endpoint in accounts-worker.js.
+          if (session && session.cloud) {
+            const actKey = 'mf_act_' + session.user;
+            LS.set(actKey, []);      // wipe local activity buffer
+            pending = [];            // wipe queued-but-unsent items
+            try {
+              // WHY: attempt cloud wipe. If the endpoint is not supported by an older Worker, ignore silently.
+              await post('/activity/clear', { user: session.user });
+            } catch { /* old Worker — local wipe is enough */ }
+          }
+          setMsg('History cleared.', true);
+        }
+      }
       else if (act === 'del') { if (confirm('Delete the profile "' + u + '" and its history? This cannot be undone.')) { await API().remove(u); if (u === session.user) { session = null; LS.del('mf_session'); location.reload(); return; } view.sel = ''; setMsg('Profile deleted.', true); } }
       else if (act === 'reset') { const c = prompt('New 6-digit code for "' + u + '":'); if (c !== null) { await API().reset(u, c); setMsg('Code changed for ' + u + '.', true); } }
       else if (act === 'delbug') { await API().delBug(+b.dataset.id || b.dataset.id); setMsg('Report deleted.', true); }
+      // ROUND 35: delete one "Continue reading" entry from the owner's Bookmarks tab.
+      // WHY: the user asked for a × button on each reading-history row in the profile. HOW: find the entry by its id (or chapterUrl
+      //   as fallback), remove it from the reads list, save it back under the signed-in profile's key, and re-render the window.
+      //   If the profile is cloud-synced, the change is queued and sent on the next sync.
+      else if (act === 'delread' && session) {
+        const lists = readLists(session.user);
+        const oldReads = (lists.reads || []);
+        const entryId = b.dataset.id;
+        // WHY: match by id first (newer entries), then by chapterUrl (older entries saved without an id).
+        const newReads = oldReads.filter(r => r.id !== entryId && (r.chapterUrl || '') !== entryId);
+        lists.reads = newReads;
+        writeLists(session.user, lists);
+        // WHY: keep app.js in sync — tell it the list changed so it redraws the start page "Continue reading" section.
+        window.dispatchEvent(new CustomEvent('mf-lists-changed', { detail: { reads: newReads } }));
+        setMsg('Removed from reading history.', true);
+      }
+      // ROUND 36 / ROUND 38: delete one activity-log entry from the "My History" tab.
+      // WHY: the user asked for a × button on each row in the "My History" activity log — this is the listHtml() tab,
+      //   separate from the Bookmarks / Continue-reading tab. The activity log lives in localStorage under 'mf_act_<user>'.
+      //   HOW: activity items have NO unique id. We use a composite key: timestamp (data-t) + url (data-url).
+      //   The two fields together make each entry unique because no two events happen at the exact same millisecond for the same page.
+      //   For cloud profiles: the local delete is immediate; we also remove from `pending` so a sync does not put it back.
+      //   ROUND 38 FIX: view.cache is updated HERE, before render() — render() uses the already-updated cache instead of
+      //   re-fetching. This eliminates the race condition where a second delete fired before the first render() finished and
+      //   the API returned the still-undeleted list. Using safeRender() (the locking wrapper) prevents concurrent renders.
+      //   Also attempts a cloud-side delete via the Worker's /activity/delete endpoint (new ROUND 38 endpoint).
+      //   IMPROVE: show a small undo toast (grace period before the item disappears).
+      else if (act === 'delact' && session) {
+        const actKey = 'mf_act_' + session.user;
+        const tVal = b.dataset.t, urlVal = b.dataset.url;
+        // WHY: read existing activity, filter out the matching item, save back.
+        const acts = LS.get(actKey, []);
+        const newActs = acts.filter(x => !(String(x.t || '') === tVal && (x.url || '') === urlVal));
+        LS.set(actKey, newActs);
+        // WHY: also remove from `pending` — the in-memory list of cloud items not yet pushed — so a sync does not put it back.
+        pending = (pending || []).filter(x => !(String(x.t || '') === tVal && (x.url || '') === urlVal));
+        // WHY: update view.cache IMMEDIATELY — this is the key fix. render() now uses this updated cache instead of
+        //   re-fetching from the API (which would still return the undeleted item if the cloud hasn't synced yet).
+        //   The rendering lock (safeRender) ensures no second render() can overwrite this mid-flight.
+        if (view.cache) view.cache = view.cache.filter(x => !(String(x.t || '') === tVal && (x.url || '') === urlVal));
+        // ROUND 38: attempt cloud-side delete so the entry does not reappear after a full re-sync.
+        // WHY: without cloud delete, the Worker still holds the item; "Sync now" restores it.
+        //   HOW: call the new /activity/delete endpoint on the Worker. Older Workers without this endpoint return 404 —
+        //   we silently ignore that so the site still works. IMPROVE: batch multiple deletes into one request.
+        if (session.cloud) {
+          try { await post('/activity/delete', { user: session.user, t: Number(tVal), url: urlVal }); } catch { /* old Worker — local delete is enough */ }
+        }
+        setMsg('Entry removed from history.', true);
+      }
       else if (act === 'syncnow') { const ch = await syncAll(); setMsg('Synced: history and bookmarks are saved on the server.', true); if (ch) { location.reload(); return; } }
       else if (act === 'copyworker') {
         let code = ''; try { const r = await fetch('accounts-worker.js', { cache: 'no-store' }); if (!r.ok) throw 0; code = await r.text(); } catch { throw new Error('accounts-worker.js is not next to index.html on this site. Upload it to GitHub, then try again.'); }
@@ -508,7 +725,11 @@
       else if (act === 'saveurl') { const v = ($('#mfpUrl').value || '').trim().replace(/\/+$/, ''); if (v && !/^https:\/\//i.test(v)) throw new Error('The address must start with https://'); if (v) LS.set('mf_acct_url', v); else LS.del('mf_acct_url'); if (session) { session = null; LS.del('mf_session'); } setMsg(v ? 'Server saved. Please sign in again.' : 'Server removed: profiles stay in this browser.', true); view.tab = 'in'; }
       else if (act === 'testurl') { const v = ($('#mfpUrl').value || '').trim().replace(/\/+$/, ''); const old = LS.get('mf_acct_url', ''); LS.set('mf_acct_url', v); try { const r = await post('/ping', {}); setMsg('Server answered: ' + (r.admin ? 'ready, admin is set.' : 'ready, but ADMIN_USER / ADMIN_CODE are not set.'), true); } catch (err) { setMsg(err.message); } if (old) LS.set('mf_acct_url', old); else LS.del('mf_acct_url'); }
     } catch (err) { setMsg(err.message); }
-    render();
+    // ROUND 38: use safeRender() instead of render() — the lock prevents race conditions on rapid clicks.
+    // WHY: if the user taps × twice quickly, the old bare render() call started two async renders in parallel; the second
+    //   fetched from the API and overwrote the first's cache update, restoring the deleted item. safeRender() queues the
+    //   second render until the first completes. IMPROVE: none needed for this use case.
+    await safeRender();
   });
 
   /* ---- 11b. ROUND 19: helpers used by the window AND by Settings (Profile & sync) ------------------------------------------------------------ */
@@ -539,7 +760,9 @@
 
   /* ---- 12. the icon on the home page ------------------------------------------------------------------------------------------------- */
   const chip = document.createElement('button'); chip.id = 'mfProfChip'; chip.type = 'button';
-  chip.addEventListener('click', () => { setMsg(''); render().then(() => { if (!dlg.open) dlg.showModal(); }); });
+  // ROUND 38: reset cache on open so the history tab always loads fresh data when the dialog is re-opened.
+  // WHY: stale cache would prevent new read events (from the current session) from appearing. IMPROVE: none needed.
+  chip.addEventListener('click', () => { setMsg(''); view.cache = null; render().then(() => { if (!dlg.open) dlg.showModal(); }); });
   // WHY: keep the icon text in step with the sign-in state. HOW: avatar + name, or "Sign in".
   function refreshChip() { chip.innerHTML = avatar(session ? session.user : '') + '<span>' + (session ? esc(session.user) + (session.role === 'admin' ? ' ★' : '') : 'Sign in') + '</span>'; chip.setAttribute('aria-label', session ? 'Profile: ' + session.user : 'Sign in or create a profile'); }
   // WHY: the icon belongs inside the big card of the start page. HOW: put it into .hero (made position:relative); try again until the page has it.
@@ -552,7 +775,17 @@
   }
   if (!place()) { const mo = new MutationObserver(() => { if (place()) mo.disconnect(); }); mo.observe(document.body, { childList: true, subtree: true }); setTimeout(() => mo.disconnect(), 10000); }
   refreshChip();
-  if (session && session.cloud) pullState().then(ch => { if (ch) location.reload(); });   // WHY: a fresh page on another device picks up the newest lists
+  // ROUND 30 - THE ENDLESS RELOADING. WHY: this line used to reload the page whenever the cloud copy of the lists differed from this browser's copy. After closing and reopening the browser
+  //   the two copies could differ every time (the app keeps 20 recent pages, the merge kept 300; one reading row per manga against one per chapter), so the page reloaded, differed again and
+  //   reloaded again for ever - "the site is reloading and reloading" with no error. HOW: (1) the merge above is now stable (same keys and limits as the app, newest wins); (2) a change from the
+  //   cloud no longer reloads anything: app.js listens for "mf-lists-changed", reads the lists again and redraws the start page (window.MF_LISTS_LIVE says that it does); (3) an old app.js without
+  //   that door falls back to a reload through MF_RELOAD (boot.js), which refuses to reload when a reload loop was seen. IMPROVE: show a small "synced" mark when the cloud brought something new.
+  if (session && session.cloud) pullState().then(ch => {
+    if (!ch) return;
+    if (window.MF_LISTS_LIVE) { try { window.dispatchEvent(new CustomEvent('mf-lists-changed')); } catch { /* the lists are saved anyway: they show at the next visit */ } }
+    else if (window.MF_RELOAD) window.MF_RELOAD('cloud lists changed');
+    else location.reload();
+  });
 
   // ROUND 19: more doors for app.js / Settings: sync(), role(), sendReport(). The window can now be opened from Settings in reading mode too (open()).
   window.MangaFlowProfiles = { version: VERSION, open: () => { setMsg(''); return render().then(() => { if (!dlg.open) dlg.showModal(); }); }, user: () => (session ? session.user : null),

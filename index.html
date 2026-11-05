@@ -48,9 +48,12 @@
             ROUND 8: style-src also allows https: because the frame inherits this policy, and without it the
             CSS FILES of manga sites were blocked (pages looked bare and broken). Style sheets cannot run code.
             (base-uri is not limited here, because the frame needs its own <base> to show pictures.)
+       ROUND 32: script-src also lists 'wasm-unsafe-eval'. WHY: the text reader of the Translate add-on (ocr/ folder) is a WebAssembly program, and the browser refuses to start
+            WebAssembly unless the policy says so. It does NOT allow eval() or inline scripts. translate.js only loads files from ocr/ (our own folder); the translation
+            services (translate.googleapis.com, api.mymemory.translated.net) are reached with fetch(), which connect-src * already allows.
        LIMIT: a <meta> policy cannot set frame-ancestors. Use the _headers file (see MANGAFLOW.md) on hosts that allow headers.
        IMPROVE: tighten connect-src to your own proxy addresses once you only use those. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cse.google.com https://www.google.com https://www.gstatic.com https://clients1.google.com https://clients1.google.co.in https://*.google.com https://partner.googleadservices.com https://*.googleadservices.com https://pagead2.googlesyndication.com https://*.googlesyndication.com https://syndicatedsearch.goog https://*.syndicatedsearch.goog; style-src 'self' 'unsafe-inline' https:; img-src * data: blob:; media-src * blob:; font-src * data:; connect-src *; frame-src 'self' about: blob: data: https://*.google.com https://*.google.co.in https://*.googleapis.com https://*.gstatic.com https://*.googlesyndication.com https://*.googleadservices.com https://*.doubleclick.net https://*.syndicatedsearch.goog https://syndicatedsearch.goog https://www.google.com https://googleads.g.doubleclick.net https://syndicatedsearch.goog https://*.syndicatedsearch.goog https://*.google.com https://*.googlesyndication.com; object-src 'none'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cse.google.com https://www.google.com https://www.gstatic.com https://clients1.google.com https://clients1.google.co.in https://*.google.com https://partner.googleadservices.com https://*.googleadservices.com https://pagead2.googlesyndication.com https://*.googlesyndication.com https://syndicatedsearch.goog https://*.syndicatedsearch.goog; style-src 'self' 'unsafe-inline' https:; img-src * data: blob:; media-src * blob:; font-src * data:; connect-src *; frame-src 'self' about: blob: data: https://*.google.com https://*.google.co.in https://*.googleapis.com https://*.gstatic.com https://*.googlesyndication.com https://*.googleadservices.com https://*.doubleclick.net https://*.syndicatedsearch.goog https://syndicatedsearch.goog https://www.google.com https://googleads.g.doubleclick.net https://syndicatedsearch.goog https://*.syndicatedsearch.goog https://*.google.com https://*.googlesyndication.com; object-src 'none'; form-action 'self'">
 
   <title>MangaFlow Reader</title>
   <link rel="stylesheet" href="style.css">
@@ -63,7 +66,7 @@
   <!-- ROUND 29: THE REOPEN COVER. WHY: while the page address asks for a reopen (#r= #p= #q=), this covers the start screen from the first paint; style.css shows it only
        while <html> has the class mf-resuming (boot.js adds it, app.js removes it). HOW: a fixed full-screen box with a spinner and one line; role=status so a screen reader says it.
        IMPROVE: show the title of the page that is being reopened. -->
-  <div id="resume" role="status" aria-live="polite"><div class="spinner" aria-hidden="true"></div><p>Reopening where you were&hellip;</p></div>
+  <div id="resume" role="status" aria-live="polite"><div class="spinner" aria-hidden="true"></div><p>Reopening where you were&hellip;</p><div id="resumeSlow" hidden><p>This is taking longer than usual. The site may be slow or blocking MangaFlow.</p><button type="button" id="resumeHome" class="primary">Open the start page</button></div></div>
 
   <!-- =====================================================================
        BROWSER VIEW  (the "mini browser": address bar + page area)
@@ -98,6 +101,13 @@
       <button id="btnFsNav" class="fs-btn" title="Full screen (Esc leaves it)" aria-label="Full screen">&#9974;</button>
       <button id="btnSettings" title="Settings" aria-label="Settings">&#9881;</button>
     </header>
+
+    <!-- ROUND 39: "Open on <site>" — a small pinned button below the right side of the header, shown ONLY while an
+         actual page of an external manga site is open in the mini-browser (never on the start page or a search
+         results list — see updateNav() in app.js). Tapping it opens that exact page on the real site in a new tab,
+         for when a button/script on the original page does not work through MangaFlow's proxy. Hidden by default;
+         app.js un-hides it. Styled and positioned in style.css (search "btnOrigSite"). -->
+    <button id="btnOrigSite" type="button" title="Open this page on the original site" aria-label="Open on the original site" hidden>&#8599; Open original site</button>
 
     <!-- WHY: thin progress line shown while a page is loading (feedback on slow proxies). -->
     <div id="loadbar"></div>
@@ -416,6 +426,7 @@
           <button type="button" role="tab" data-tab="proxy" class="active">Proxies</button>
           <button type="button" role="tab" data-tab="reading">Reading</button>
           <button type="button" role="tab" data-tab="search">Search &amp; extras</button>
+          <button type="button" role="tab" data-tab="translate">Translate</button>
           <button type="button" role="tab" data-tab="profile">Profile</button>
           <button type="button" role="tab" data-tab="memory">Memory</button>
           <button type="button" role="tab" data-tab="security">Security</button>
@@ -501,6 +512,27 @@
           <div class="check-pair"><label class="check"><input type="checkbox" id="setFs"> Full-screen button</label>
           <label class="check"><input type="checkbox" id="setEdge"> Top / End slider</label></div>
           <p class="muted small">Top / End slider (left side, above the reload wheel) replaces the two Top / End keys. Switch it off to get the keys back. The Google ID is the <code>cx=</code> value of your Programmable Search Engine.</p>
+        </fieldset>
+
+        <!-- ROUND 32: TRANSLATE. WHY: the owner wants to read pages in another language (Lens style). HOW: the lists are filled by translate.js (the language names live there);
+             app.js saves the choices as settings.trTo / trFrom / trEngine / trAuto / showTranslate and tells translate.js through the event "mf-settings".
+             Without translate.js this card and its tab are hidden (body.no-tr-file, set by app.js). IMPROVE: add a "font" choice for the new words. -->
+        <fieldset id="trBox" class="set-card" data-tab="translate">
+          <legend>Translate pages</legend>
+          <label class="check"><input type="checkbox" id="setTrShow"> Translate button in reading mode</label>
+          <label>Translate into
+            <select id="setTrTo" aria-label="Language to translate into"></select>
+          </label>
+          <label>Language written on the pages
+            <select id="setTrFrom" aria-label="Language written on the pages"></select>
+          </label>
+          <label>Translation service
+            <select id="setTrEngine"><option value="auto">Automatic (best one that works)</option><option value="chrome">Chrome on-device translator</option><option value="google">Google</option><option value="mymemory">MyMemory</option></select>
+          </label>
+          <label class="check"><input type="checkbox" id="setTrAuto"> Start translating as soon as I open reading mode</label>
+          <div class="inline"><button type="button" id="setTrTest">Test translate</button></div>
+          <pre id="trTestOut" class="small" hidden style="white-space:pre-wrap;margin:6px 0 0"></pre>
+          <p class="muted small">Press the round <b>文A</b> button on the left edge while reading. The words in the pictures are read and the new words are laid over the old ones. Tap a new box to peek at the original. The original pictures (and the PDF download) are never changed.</p>
         </fieldset>
 
         <!-- ROUND 19: PROFILE & SYNC. WHY: the profile window used to be only on the start page; now it opens from Settings too (also in reading mode),
@@ -602,6 +634,10 @@
   <script src="reload-wheel.js"></script>
   <!-- ROUND 18 (OPTIONAL): the Top / End slider on the left edge, above the reload wheel. Delete this line (or the file) and the Top / End keys stay. -->
   <script src="edge-slider.js"></script>
+  <!-- ROUND 32 (OPTIONAL): the Translate button (文A, left edge) and its engine. It needs the folder ocr/ (text reader + language files). Delete this line and the
+       button, the Settings tab and every translation feature are simply gone; nothing else needs it. It talks to app.js only through the events mf-settings,
+       mf-settings-set and mf-translate-problem. -->
+  <script src="translate.js"></script>
   <!-- ROUND 13: optional profile icon + sign-in + admin view (delete this line and profiles.js to remove the feature) -->
   <script src="profiles.js"></script>
 </body>

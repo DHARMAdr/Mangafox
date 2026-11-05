@@ -195,6 +195,23 @@ input[type="text"]:focus { outline: 2px solid var(--accent); border-color: trans
   box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
 }
 
+/* ROUND 39 — "Open on <site>" pinned button. WHY: a quick, always-reachable way to jump from a manga site shown
+   inside MangaFlow's mini-browser to that exact page on the REAL site, in a new tab (useful when a button or
+   script on the original page cannot work through the proxy). HOW: position:fixed, pinned just below the navbar
+   on the right (matches the "below the right header" placement asked for); hidden by default (index.html), only
+   un-hidden by app.js (updateNav) while an actual external page — not the start page, not a search list — is on
+   screen, so it never gets in the way otherwise. z-index sits above the iframe like #fabRead; a lighter, "ghost"
+   style (instead of the solid accent colour of #fabRead) keeps it from competing for attention with the main
+   Reading-mode button. IMPROVE: let people drag it out of the way of content underneath on very small screens. */
+#btnOrigSite {
+  position: fixed; top: calc(60px + var(--safe-t)); right: 10px; z-index: 19;
+  height: 34px; padding: 0 12px; border-radius: 999px; font-size: .78rem; font-weight: 600;
+  background: var(--bar); border: 1px solid var(--line); color: var(--fg);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .25); white-space: nowrap;
+}
+#btnOrigSite:hover { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 760px) { #btnOrigSite { top: auto; bottom: calc(76px + var(--safe-b)); right: 10px; } }
+
 /* ---------- 4b. SEARCH PILL + FLOATING SEARCH BAR (small screens) ----------
    WHY: on a phone the long address input was squeezed next to six buttons and showed almost nothing.
         Under 760px wide the input is hidden, the navbar wraps into two rows, and a full-width "pill"
@@ -283,7 +300,16 @@ input[type="text"]:focus { outline: 2px solid var(--accent); border-color: trans
 /* WHY: a thin reading-progress line at the top of the screen. HOW: fixed to the top edge (below any phone notch), full */
 /* width, 3px tall, above everything (z-index 35); pointer-events:none lets taps pass through it. Made 4px later. */
 /* IMPROVE: show percent text on hover. */
-#progress { position: fixed; top: var(--safe-t); left: 0; right: 0; height: 3px; z-index: 35; background: transparent; pointer-events: none; }
+/* ROUND 31 - THE LINE IS ALWAYS AT THE VERY TOP EDGE OF THE SCREEN, whatever the mode or the device.
+   WHY: the owner (2026-10-31): "in full screen on my phone the line does not go to the top, it shows in between the chapters; it must always be at the top, on every device and browser, also
+        while scrolling down". Until round 30 the line used top: var(--safe-t) (the phone-notch space). In the normal page that space is 0 or is covered by the title bar, so it looked right.
+        But in full screen the phone browser reports a real notch / status-bar space (e.g. 30 px), the title bar is hidden (round 29c), and the line floated 30 px down INSIDE the pictures.
+        The same happened in normal mode while the title bar slid away on scrolling down.
+   HOW: top is now plain 0 for every case: normal, full screen (body.fs), scrolling, F11, installed-app windows. The title bar below keeps its own notch space (padding-top), so nothing else moves.
+        A few pixels of the line can sit under a camera hole: that is fine (the line is thin and spans the whole width).
+   TEST: R31-1 .. R31-3 in test/ui.test.js put a 32 px notch space on a phone and a computer and measure the line in normal, full screen and scrolled states.
+   IMPROVE: if a phone ever hides the line under its status bar, add a second thin line at the bottom edge as a fallback. */
+#progress { position: fixed; top: 0; left: 0; right: 0; height: 3px; z-index: 35; background: transparent; pointer-events: none; }
 /* WHY: the coloured part of the progress line. HOW: the <i> element starts at width 0 and app.js changes the width; the */
 /* .12s linear transition makes growth smooth. IMPROVE: none needed. */
 #progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .12s linear; }
@@ -1291,6 +1317,10 @@ html.mf-resuming #resume {
 }
 html.mf-resuming #resume p { margin: 6px 0 0; color: var(--muted); font: 15px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
 html.mf-resuming body { overflow: hidden; }            /* nothing scrolls behind the cover */
+/* ROUND 30: the way out of a slow reopen. boot.js shows #resumeSlow (it has the attribute hidden until then) when the cover has stood for resumeSlowMs. */
+#resumeSlow { text-align: center; margin-top: 14px; padding: 0 16px; }
+#resumeSlow[hidden] { display: none; }
+#resumeSlow button { min-height: 44px; border-radius: 99px; padding: 0 20px; margin-top: 10px; }
 
 
 /* ============================================================
@@ -1306,3 +1336,31 @@ html.mf-resuming body { overflow: hidden; }            /* nothing scrolls behind
 .ch-verify { margin: 8px 10px; padding: 18px 14px; border: 1px dashed var(--accent); border-radius: 12px; background: rgba(120, 120, 255, .08); }
 .ch-verify .row { flex-wrap: wrap; align-items: center; }
 .ch-verify .row button { min-height: 44px; border-radius: 99px; padding: 0 16px; }
+
+/* =====================================================================
+   ROUND 32 - TRANSLATE (translate.js)
+   WHY: the Translate add-on draws its own button, bar, panel and boxes with CSS that lives INSIDE translate.js (like the slider and the wheel). Only the rule below is here,
+        because it belongs to the Settings dialog, which is part of index.html.
+   HOW: app.js puts body.no-tr-file when translate.js is not linked; then the "Translate" tab and card are hidden (nothing would work without the file).
+   IMPROVE: none needed.
+   ===================================================================== */
+body.no-tr-file [data-tab="translate"] { display: none !important; }
+
+/* =====================================================================
+   ROUND 34 - DELETE HISTORY BUTTONS
+   WHY: the person wanted to remove individual history entries (reading history and recent pages) without clearing everything.
+   HOW: a small × button (.item-del) is added at the right end of each history row by item() in app.js. It is visually separate
+        from the row so it is clear it does not open the manga. It sits at the right edge with margin-left:auto pushing it
+        there. On hover it turns red so the person knows it is a destructive action. IMPROVE: add a fade-out animation.
+   ===================================================================== */
+.item-del {
+  flex: none; margin-left: auto; min-width: 28px; min-height: 28px; width: 28px; height: 28px;
+  padding: 0; border-radius: 50%; border: 1px solid var(--line, #ccc); background: transparent;
+  color: var(--muted, #888); font-size: 1rem; line-height: 1; cursor: pointer;
+  display: grid; place-items: center; transition: background .15s, color .15s, border-color .15s;
+}
+.item-del:hover { background: #e53935; border-color: #e53935; color: #fff; }
+.item-del:active { transform: scale(.9); }
+/* WHY: make sure the × button does not get squashed when the title is long. HOW: tell .item to let the .tx column shrink
+   but not the delete button. IMPROVE: none needed. */
+.item .tx { flex: 1 1 0; min-width: 0; }
